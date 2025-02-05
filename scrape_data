@@ -1,1 +1,755 @@
+```--- FILE: .github/workflows/aws.yml ---
+name: Platform AWS ECS Deployment
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Log into Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: platform
+        IMAGE_TAG: $GITHUB_SHA
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Update ECS service
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+      with:
+        task-definition: ecs/platform-task.json
+        service: platform-service
+        cluster: platform-cluster
+        wait-for-service-stability: true
+EOF```
+```--- FILE: Application/Application.csproj ---
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>SLYD.Application</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="AutoMapper" Version="13.0.1" />
+      <PackageReference Include="Microsoft.AspNetCore.Components.Authorization" Version="8.0.0" />
+      <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+      <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0-preview.5.24306.7" />
+      <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Domain\Domain.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="Interfaces\Features\Lxd\LxdServer\" />
+    </ItemGroup>
+
+</Project>
+EOF```
+```--- FILE: Application/DependencyInjection.cs ---
+using Microsoft.Extensions.DependencyInjection;
+using SLYD.Application.Features;
+using SLYD.Application.Features.Cloudflare;
+using SLYD.Application.Features.CustomerFeature;
+using SLYD.Application.Features.Lxd;
+using SLYD.Application.Features.Lxd.LxdImages;
+using SLYD.Application.Interfaces.Features;
+using SLYD.Application.Interfaces.Features.UserService;
+using SLYD.Application.Pipelines;
+using SLYD.Application.Handlers;
+using SLYD.Application.Interfaces.Features.Cloudflare;
+using SLYD.Application.Interfaces.Features.CustomerFeature;
+using SLYD.Application.Interfaces.Features.Lxd;
+using SLYD.Application.Interfaces.Features.Lxd.LxdImages;
+
+namespace SLYD.Application;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(this IServiceCollection services)
+    {
+        //Add Features
+        // services.AddScoped<ILxdInstanceService, LxdInstanceService>();
+        services.AddScoped<IAddLxdServer, AddLxdServer>();
+        services.AddScoped<ILxdImageFeatures, LxdImageFeatures>();
+        services.AddScoped<ILxdInstanceFeatures, LxdInstanceFeatures>();
+        services.AddScoped<ICloudflareFeatures, CloudflareFeatures>();
+        services.AddScoped<IProviderServerFeatures, ProviderServerFeatures>();
+        services.AddScoped<IUserService, UserService>();
+        services.AddScoped<ICustomerRentalService, CustomerRentalService>();
+        services.AddScoped<IInstallScriptFeatures, InstallScriptFeatures>();
+        
+        //Add Message Handlers
+        services.AddScoped<LxdServerMessageHandler>();
+        services.AddScoped<LxdInstanceMessageHandler>();
+
+        //Add Pipelines
+        services.AddScoped<DeleteLxdServerPipeline>();
+        services.AddScoped<CreateLxdInstance>();
+        services.AddScoped<DeleteLxdInstance>();
+        
+        return services;
+    }
+}
+EOF```
+```--- FILE: Domain/Domain.csproj ---
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>Domain</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.1" />
+    </ItemGroup>
+</Project>
+EOF```
+```--- FILE: Infrastructure/Infrastructure.csproj ---
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>SLYD.Infrastructure</RootNamespace>
+    </PropertyGroup>
+    
+    <ItemGroup>
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.6" />
+        <PackageReference Include="RabbitMQ.Client" Version="6.4.0" />
+        <PackageReference Include="Auth0.AspNetCore.Authentication" Version="1.4.1" />
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.6" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.6" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.6">
+        <PrivateAssets>all</PrivateAssets>
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      </PackageReference>
+      <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+      <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.1" />
+      <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.0" />
+      <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Application\Application.csproj" />
+    </ItemGroup>
+</Project>
+EOF```
+```--- FILE: Infrastructure/DependencyInjection.cs ---
+using System.Security.Claims;
+using Auth0.AspNetCore.Authentication;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.EntityFrameworkCore;
+using SLYD.Application.Features;
+using SLYD.Application.Features.CustomerFeature;
+using SLYD.Application.Interfaces.Cloudflare;
+using SLYD.Application.Interfaces.Features;
+using SLYD.Application.Interfaces.Features.CustomerFeature;
+using SLYD.Application.Interfaces.Repositories;
+using SLYD.Application.Interfaces.Features.UserService;
+using SLYD.Application.Interfaces.Infrastructure;
+using SLYD.Application.Interfaces.Infrastructure.Internal;
+using SLYD.Application.Interfaces.Infrastructure.Lxd;
+using SLYD.Application.Interfaces.Infrastructure.Repositories;
+using SLYD.Application.Interfaces.Pipelines;
+using SLYD.Application.Interfaces.RabbitMQ;
+using SLYD.Application.Interfaces.WebConsole;
+using SLYD.Domain.Models;
+using SLYD.Domain.Models.ProviderModels;
+using SLYD.Infrastructure.Services;
+using SLYD.Infrastructure.Services.Auth;
+using SLYD.Infrastructure.Data;
+using SLYD.Infrastructure.Repositories;
+using SLYD.Infrastructure.Services.Cloudflare;
+using SLYD.Infrastructure.Services.WebConsole.Rent;
+using SLYD.Infrastructure.Services.Helper;
+using SLYD.Infrastructure.Services.Internal;
+using SLYD.Infrastructure.Services.Lxd;
+using SLYD.Infrastructure.Services.RabbitMQ;
+using SLYD.Infrastructure.Services.RabbitSender;
+using TokenProvider = SLYD.Infrastructure.Services.Auth.TokenProvider;
+
+namespace SLYD.Infrastructure;
+
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddSingleton(configuration);
+        services.AddDatabase(configuration);
+
+        services.AddRabbitMQ();
+        services.AddLxd();
+        services.AddCloudflare();
+        services.AddHttpClient();
+        services.AddWebConsole();
+        
+        services.AddScoped<ILxdInstanceOperationService, LxdInstanceOperationService>();
+        services.AddScoped<IImageLibraryService, ImageLibraryService>();
+        services.AddAuth0Services(configuration);
+
+        services.AddLogging();
+
+        return services;
+    }
+
+    public static IServiceCollection AddRabbitMQ(this IServiceCollection services)
+    {
+        services.AddScoped<RabbitFactoryService>();
+        services.AddScoped<IRabbitSenderService, RabbitSenderService>();
+        
+        return services;
+    }
+    
+    public static IServiceCollection AddHttpClient(this IServiceCollection services)
+    {
+        services.AddScoped<HttpClientHandlerService>();
+        services.AddTransient<HttpClient>();
+        
+        return services;
+    }
+    
+    public static IServiceCollection AddWebConsole(this IServiceCollection services)
+    {
+        services.AddScoped<ProviderService>();
+        services.AddScoped<PublicKeyService>();
+        services.AddScoped<RandomStringGenerator>();
+        services.AddScoped<IProviderServerMetricsService, ProviderServerMetricsService>();
+        services.AddScoped<IUserPublicKeyService, UserPublicKeyService>();
+        
+        
+        return services;
+    }
+    
+    public static IServiceCollection AddLxd(this IServiceCollection services)
+    {
+        services.AddScoped<WebSocketService>();
+        services.AddScoped<RentInstanceService>();
+        
+        return services;
+    }
+    
+    public static IServiceCollection AddCloudflare(this IServiceCollection services)
+    {
+        services.AddScoped<ICloudflareDNS, CloudflareDNSService>();
+        services.AddScoped<ICloudflareTunnel, CloudflareTunnelService>();
+        
+        return services;
+    }
+    
+    public static IServiceCollection AddAuth0Services(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddScoped<IAuth0Service, Auth0Service>();
+        services.AddSingleton<ITokenProvider, TokenProvider>();
+        
+        services.AddAuth0WebAppAuthentication(options =>
+        {
+            options.Domain = configuration["Auth0:Domain"];
+            options.ClientId = configuration["Auth0:ClientId"];
+            options.Scope = "openid profile email";
+
+            options.OpenIdConnectEvents = new OpenIdConnectEvents
+            {
+                OnTicketReceived = async context =>
+                {
+                    // Get user's claims
+                    var claims = context.Principal.Claims;
+                    // Extract user's information from claims
+                    var userId = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
+                    var email = claims.FirstOrDefault(c => c.Type == ClaimTypes.Email)?.Value;
+
+                    // Get a reference to your User Service
+                    var userContext = context.HttpContext.RequestServices.GetRequiredService<IUserService>();
+                    
+                    // // get user
+                    var user = await userContext.GetUserAsync(userId);
+                    
+                    // Check if user exists in your database, if not, create a new user
+                    if (user == null)
+                    { ;
+                        user = new User() {Email = email, AuthId = userId };
+                        await userContext.AddUser(user);
+                    
+                        var storedUser = await userContext.GetUserAsync(userId);
+                    
+                        //Create Customer From User
+                        var customer = new Customer() {UserId = storedUser.Id };
+                        await userContext.AddCustomer(customer);
+                        
+                        //Create Provider From User
+                        var provider = new Provider() {UserId = storedUser.Id };
+                        await userContext.AddProvider(provider);
+                    }
+                }
+            };
+        });
+        
+        services.AddScoped<Auth0Service>();
+
+        return services;
+    }
+
+    public static IServiceCollection AddDatabase(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddScoped<IInstanceRepository, InstanceRepository>();
+        services.AddScoped<IProviderServerRepository, ProviderServerRepository>();
+        services.AddScoped<IUserRepostiory, UserRepository>();
+        services.AddScoped<IImageLibraryRepository, ImageLibraryRepository>();
+        services.AddScoped<IRentalRepository, RentalRepository>();
+        services.AddScoped<IUserPublicKeyRepository, UserPublicKeyRepository>();
+        services.AddScoped<IScriptRepository, ScriptRepository>();
+        services.AddScoped<IScriptSeedService, ScriptSeedService>();
+
+        services.AddDbContext<SlydDbContext>(
+            options => options.UseNpgsql(configuration.GetConnectionString("Conn"))
+                .AddInterceptors(new SoftDeleteInterceptor()));
+        return services;
+    }
+}
+EOF```
+```--- FILE: LxdBackground/LxdBackground.csproj ---
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Application\Application.csproj" />
+      <ProjectReference Include="..\Domain\Domain.csproj" />
+      <ProjectReference Include="..\Infrastructure\Infrastructure.csproj" />
+    </ItemGroup>
+
+</Project>
+EOF```
+```--- FILE: LxdBackground/Program.cs ---
+using LxdBackground.Services;
+using Serilog;
+using Microsoft.EntityFrameworkCore;
+using RabbitRecieverFactory.Services;
+using SLYD.Infrastructure.Data;
+using SLYD.Application;
+using SLYD.Infrastructure;
+
+string environment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Development";
+Console.WriteLine($"DOTNET_ENVIRONMENT: {Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")}"); // Log the environment variable
+
+Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", environment);
+
+HostApplicationBuilderSettings settings = new()
+{
+    Args = args,
+    Configuration = new ConfigurationManager(),
+    ContentRootPath = Directory.GetCurrentDirectory(),
+};
+
+settings.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{environment}.json", optional: true, reloadOnChange: true);
+
+settings.Configuration.AddEnvironmentVariables(prefix: "PREFIX_");
+settings.Configuration.AddCommandLine(args);
+
+var builder = Host.CreateApplicationBuilder(settings);
+
+//Add support to logging with SERILOG
+builder.Services.AddSerilog((services, loggerConfiguration) => loggerConfiguration
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.File("logs/log.txt", rollingInterval: RollingInterval.Day));
+
+builder.Services.AddHostedService<WorkerService>();
+builder.Services.AddScoped<LxdFactoryService>();
+builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddTransient<HttpClient>();
+
+
+builder.Services.AddDbContext<SlydDbContext>(
+    options => options.UseNpgsql(builder.Configuration.GetConnectionString("Conn")),
+    ServiceLifetime.Scoped);
+
+var host = builder.Build();
+host.Run();
+EOF```
+```--- FILE: LxdBackground/Properties/launchSettings.json ---
+﻿{
+  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "iisSettings": {
+    "windowsAuthentication": false,
+    "anonymousAuthentication": true,
+    "iisExpress": {
+      "applicationUrl": "http://localhost:56656",
+      "sslPort": 44350
+    }
+  },
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:5092",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:7006;http://localhost:5092",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "IIS Express": {
+      "commandName": "IISExpress",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+EOF```
+```--- FILE: LxdBackground/Services/LxdFactoryService.cs ---
+using System.Diagnostics;
+using SLYD.Application.Interfaces.Repositories;
+using SLYD.Domain.Models.ProviderModels;
+
+namespace LxdBackground.Services;
+
+public class LxdFactoryService
+{    
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<LxdFactoryService> _logger;
+    private List<ProviderServer> providerServers;
+    private IProviderServerRepository _providerServerRepository;
+    private HttpClient _httpClient;
+
+    private const int MaxRetryAttempts = 5;
+    private const int InitialDelayMilliseconds = 1000;
+
+    public LxdFactoryService(ILogger<LxdFactoryService> logger, IConfiguration configuration, IProviderServerRepository providerServerRepository, HttpClient httpClient, IServiceProvider serviceProvider)
+    {
+        _logger = logger;
+        _providerServerRepository = providerServerRepository;
+        _httpClient = httpClient;
+        _serviceProvider = serviceProvider;
+    }
+
+    public async Task GetLxdStats()
+    {
+        const int delayMinutes = 5;
+        const int delayMilliseconds = delayMinutes * 60 * 1000;
+
+        while (true)
+        {
+            var stopwatch = Stopwatch.StartNew();
+
+            providerServers = await _providerServerRepository.GetProvisionedServersAsync();
+
+            foreach (var server in providerServers)
+            {
+                int retryAttempts = 0;
+                int delay = InitialDelayMilliseconds;
+
+                while (retryAttempts < MaxRetryAttempts)
+                {
+                    try
+                    {
+                        using (var scope = _serviceProvider.CreateScope())
+                        {
+                            var providerServerRepository =
+                                scope.ServiceProvider.GetRequiredService<IProviderServerRepository>();
+
+                            // Logic for LXD here
+                            string lxdUri =
+                                await providerServerRepository.GetProviderServerLxdUriFromServerId(server.Id);
+                            var uri = "https://" + lxdUri + "/1.0/instances?project=default";
+
+                            HttpResponseMessage response = await _httpClient.GetAsync(uri);
+
+                            if (response.IsSuccessStatusCode)
+                                await providerServerRepository.AddProviderServerMetrics(server.Id, true);
+                            else
+                                await providerServerRepository.AddProviderServerMetrics(server.Id, false);
+
+                            _logger.LogInformation("Connected to LXD Server");
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        retryAttempts++;
+                        _logger.LogError($"Connection attempt {retryAttempts} failed: {ex.Message}");
+
+                        if (retryAttempts >= MaxRetryAttempts)
+                        {
+                            _logger.LogError("Max retry attempts reached. Moving to next server.");
+                        }
+
+                        await Task.Delay(delay);
+                        delay *= 2; // Exponential backoff
+                    }
+                }
+            }
+
+            stopwatch.Stop();
+            int elapsedMilliseconds = (int)stopwatch.ElapsedMilliseconds;
+
+            if (elapsedMilliseconds < delayMilliseconds)
+            {
+                int remainingDelay = delayMilliseconds - elapsedMilliseconds;
+                await Task.Delay(remainingDelay);
+            }
+        }
+    }
+}
+EOF```
+```--- FILE: LxdBackground/appsettings.Development.json ---
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+EOF```
+```--- FILE: LxdBackground/appsettings.json ---
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+EOF```
+```--- FILE: RabbitConsumer/Dockerfile ---
+﻿FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+USER $APP_UID
+WORKDIR /app
+EXPOSE 6000
+
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ARG BUILD_CONFIGURATION=Release
+WORKDIR /src
+COPY ["RabbitConsumer/RabbitConsumer.csproj", "RabbitConsumer/"]
+COPY ["Application/Application.csproj", "Application/"]
+COPY ["Domain/Domain.csproj", "Domain/"]
+COPY ["Infrastructure/Infrastructure.csproj", "Infrastructure/"]
+RUN dotnet restore "RabbitConsumer/RabbitConsumer.csproj"
+COPY . .
+WORKDIR "/src/RabbitConsumer"
+RUN dotnet build "RabbitConsumer.csproj" -c $BUILD_CONFIGURATION -o /app/build
+
+FROM build AS publish
+ARG BUILD_CONFIGURATION=Release
+RUN dotnet publish "RabbitConsumer.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENV ASPNETCORE_ENVIRONMENT=Development
+ENTRYPOINT ["dotnet", "RabbitConsumer.dll"]
+EOF```
+```--- FILE: RabbitConsumer/Program.cs ---
+using Serilog;
+using Microsoft.EntityFrameworkCore;
+using RabbitRecieverFactory.Services;
+using SLYD.Infrastructure.Data;
+using SLYD.Application;
+using SLYD.Application.Services;
+using SLYD.Infrastructure;
+
+string environment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Development";
+Console.WriteLine($"DOTNET_ENVIRONMENT: {Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")}"); // Log the environment variable
+
+Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", environment);
+
+HostApplicationBuilderSettings settings = new()
+{
+    Args = args,
+    Configuration = new ConfigurationManager(),
+    ContentRootPath = Directory.GetCurrentDirectory(),
+};
+
+settings.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{environment}.json", optional: true, reloadOnChange: true);
+
+settings.Configuration.AddEnvironmentVariables(prefix: "PREFIX_");
+settings.Configuration.AddCommandLine(args);
+
+var builder = Host.CreateApplicationBuilder(settings);
+
+//Add support to logging with SERILOG
+builder.Services.AddSerilog((services, loggerConfiguration) => loggerConfiguration
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.File("logs/log.txt", rollingInterval: RollingInterval.Day));
+
+builder.Services.AddHostedService<WorkerService>();
+builder.Services.AddSingleton<IConfiguration>(builder.Configuration);
+builder.Services.AddApplication();
+builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddSingleton<RabbitFactoryService>();
+builder.Services.AddTransient<HttpClient>();
+builder.Services.AddScoped<MessageDispatcher>();
+
+
+builder.Services.AddDbContext<SlydDbContext>(
+    options => options.UseNpgsql(builder.Configuration.GetConnectionString("Conn")),
+    ServiceLifetime.Scoped);
+
+var host = builder.Build();
+host.Run();
+EOF```
+```--- FILE: RabbitConsumer/RabbitConsumer.csproj ---
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RootNamespace>RabbitReciever</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="RabbitMQ.Client" Version="6.4.0" />
+        <PackageReference Include="Serilog.AspNetCore" Version="8.0.3" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Application\Application.csproj" />
+      <ProjectReference Include="..\Domain\Domain.csproj" />
+      <ProjectReference Include="..\Infrastructure\Infrastructure.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Folder Include="Logs\" />
+    </ItemGroup>
+</Project>
+EOF```
+```--- FILE: RabbitConsumer/appsettings.Development.json ---
+{
+  "Serilog": {
+    "Using":  [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+    "MinimumLevel": "Information",
+    "WriteTo": [
+      { "Name": "Console" },
+      { "Name": "File", "Args": { "path": "Logs/log.txt" } }
+    ],
+    "Enrich": [ "FromLogContext", "WithMachineName", "WithThreadId" ]
+  },
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "Conn": "Host=blazor-dev.cluster-cjw8gk2y8j5y.us-east-1.rds.amazonaws.com;Port=5432;Database=Slyd;Username=postgres;Password=xP:)7lZB:O?|<(Bdo07%~tmZH7zr;"
+  },
+  "CloudflareUsers" : {
+    "BearerToken" : "_2zX4Pii_DEEc1M1wGZ1mNimq9T05XaiNzMTdWaI",
+    "AccountId" : "08dc69dd4aaaf3f1434d349404185e03",
+    "ZoneId" : "2bb11df44b99f8214968f786ea3733b1",
+    "BaseUri" : "https://api.cloudflare.com/",
+    "Secret" : "c2VjcmV0IHN0cmluZyBnb2VzIGhlcmU="
+  },
+  "CloudflareManagement" : {
+    "BearerToken" : "_2zX4Pii_DEEc1M1wGZ1mNimq9T05XaiNzMTdWaI",
+    "AccountId" : "08dc69dd4aaaf3f1434d349404185e03",
+    "ZoneId" : "d770d60d872c8fca4a2270963a42c5e5",
+    "BaseUri" : "https://api.cloudflare.com/",
+    "Secret" : "c2VjcmV0IHN0cmluZyBnb2VzIGhlcmU="
+  },
+  "RabbitMQ" : {
+    "RabbitMqUri": "amqp://sysadmin:f5aeVFS1GmRH44@ec2-35-93-47-1.us-west-2.compute.amazonaws.com:5672",
+    "ExchangeName": "SlydExchange",
+    "QueueName": "SlydQueue",
+    "RoutingKey": "SlydRoutingKey"
+  }
+}
+EOF```
+```--- FILE: RabbitConsumer/appsettings.Production.json ---
+{
+  "Serilog": {
+    "Using":  [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+    "MinimumLevel": "Information",
+    "WriteTo": [
+      { "Name": "Console" },
+      { "Name": "File", "Args": { "path": "Logs/log.txt" } }
+    ],
+    "Enrich": [ "FromLogContext", "WithMachineName", "WithThreadId" ]
+  },
+  "AllowedHosts": "*",
+  "ConnectionStrings": {
+    "Conn": "Host=blazor-dev.cluster-cjw8gk2y8j5y.us-east-1.rds.amazonaws.com;Port=5432;Database=Slyd;Username=postgres;Password=xP:)7lZB:O?|<(Bdo07%~tmZH7zr;"
+  },
+  "CloudflareUsers" : {
+    "BearerToken" : "_2zX4Pii_DEEc1M1wGZ1mNimq9T05XaiNzMTdWaI",
+    "AccountId" : "08dc69dd4aaaf3f1434d349404185e03",
+    "ZoneId" : "2bb11df44b99f8214968f786ea3733b1",
+    "BaseUri" : "https://api.cloudflare.com/",
+    "Secret" : "c2VjcmV0IHN0cmluZyBnb2VzIGhlcmU="
+  },
+  "CloudflareManagement" : {
+    "BearerToken" : "_2zX4Pii_DEEc1M1wGZ1mNimq9T05XaiNzMTdWaI",
+    "AccountId" : "08dc69dd4aaaf3f1434d349404185e03",
+    "ZoneId" : "d770d60d872c8fca4a2270963a42c5e5",
+    "BaseUri" : "https://api.cloudflare.com/",
+    "Secret" : "c2VjcmV0IHN0cmluZyBnb2VzIGhlcmU="
+  },
+  "RabbitMQ" : {
+    "RabbitMqUri": "amqp://sysadmin:f5aeVFS1GmRH44@ec2-35-93-47-1.us-west-2.compute.amazonaws.com:5672",
+    "ExchangeName": "SlydExchange",
+    "QueueName": "SlydQueue",
+    "RoutingKey": "SlydRoutingKey"
+  }
+}
+EOF```
+```--- FILE: RabbitConsumer/appsettings.json ---
+{
+  "Serilog": {
+    "Using":  [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+    "MinimumLevel": "Information",
+    "WriteTo": [
+      { "Name": "Console" },
+      { "Name": "File", "Args": { "path": "Logs/log.txt" } }
+    ],
+    "Enrich": [ "FromLogContext", "WithMachineName", "WithThreadId" ]
+  },
+  "AllowedHosts": "*"
+}
+EOF```
 
